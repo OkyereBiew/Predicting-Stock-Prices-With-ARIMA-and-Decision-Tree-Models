@@ -1,0 +1,1194 @@
+# Code Reference for Tesla Stock Price Prediction Research
+
+This file contains all the Python code used in the research paper "Predicting Stock Prices Using ARIMA and Decision Tree Models: A Comparative Analysis of Tesla Stock". The code is organized by analysis phase, from data preprocessing to visualization creation.
+
+## Table of Contents
+1. [Data Preprocessing](#data-preprocessing)
+2. [ARIMA Model Implementation](#arima-model-implementation)
+3. [Decision Tree Model Implementation](#decision-tree-model-implementation)
+4. [Model Evaluation](#model-evaluation)
+5. [Paper Visualizations](#paper-visualizations)
+
+<a name="data-preprocessing"></a>
+## 1. Data Preprocessing (preprocess_data.py)
+
+```python
+# preprocess_data.py
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from statsmodels.tsa.stattools import adfuller
+from sklearn.model_selection import train_test_split
+import os
+
+# Set the style for plots
+plt.style.use('ggplot')
+sns.set_style('whitegrid')
+
+# Create directories if they don't exist
+os.makedirs('./visualizations', exist_ok=True)
+os.makedirs('./data', exist_ok=True)
+
+# Load the data
+data = pd.read_csv('./data/TESLA.csv')
+
+# Display basic information
+print(f"Dataset shape: {data.shape}")
+print(f"Date range: {data['Date'].min()} to {data['Date'].max()}")
+
+# Convert Date to datetime
+data['Date'] = pd.to_datetime(data['Date'])
+
+# Check for missing values
+print(f"Missing values:\n{data.isnull().sum()}")
+
+# Basic statistics
+print(f"Basic statistics:\n{data.describe()}")
+
+# Plot the stock prices
+plt.figure(figsize=(12, 6))
+plt.plot(data['Date'], data['Close'], label='Close Price')
+plt.title('Tesla Stock Price (2010-2024)')
+plt.xlabel('Date')
+plt.ylabel('Price (USD)')
+plt.legend()
+plt.savefig('./visualizations/tesla_stock_prices.png')
+plt.close()
+
+# Check for stationarity
+def test_stationarity(timeseries):
+    # Rolling statistics
+    rolling_mean = timeseries.rolling(window=30).mean()
+    rolling_std = timeseries.rolling(window=30).std()
+    
+    # Plot rolling statistics
+    plt.figure(figsize=(12, 6))
+    plt.plot(timeseries, label='Original')
+    plt.plot(rolling_mean, label='Rolling Mean')
+    plt.plot(rolling_std, label='Rolling Std')
+    plt.title('Rolling Mean & Standard Deviation')
+    plt.legend()
+    plt.savefig('./visualizations/rolling_statistics.png')
+    plt.close()
+    
+    # Perform Dickey-Fuller test
+    print('Results of Dickey-Fuller Test:')
+    dftest = adfuller(timeseries.dropna(), autolag='AIC')
+    dfoutput = pd.Series(dftest[0:4], index=['Test Statistic','p-value','#Lags Used','Number of Observations Used'])
+    for key, value in dftest[4].items():
+        dfoutput[f'Critical Value ({key})'] = value
+    print(dfoutput)
+    
+    return dftest[1] <= 0.05
+
+# Test stationarity of closing prices
+print("Testing stationarity of closing prices:")
+is_stationary = test_stationarity(data['Close'])
+print(f"Is the series stationary? {is_stationary}")
+
+# If not stationary, difference the series
+if not is_stationary:
+    data['Close_diff'] = data['Close'].diff()
+    plt.figure(figsize=(12, 6))
+    plt.plot(data['Date'][1:], data['Close_diff'][1:])
+    plt.title('First Order Differencing')
+    plt.xlabel('Date')
+    plt.ylabel('Difference')
+    plt.savefig('./visualizations/differenced_series.png')
+    plt.close()
+    
+    print("\nTesting stationarity of differenced series:")
+    is_diff_stationary = test_stationarity(data['Close_diff'].dropna())
+    print(f"Is the differenced series stationary? {is_diff_stationary}")
+    
+    # If still not stationary, try log transformation and differencing
+    if not is_diff_stationary:
+        data['Close_log'] = np.log(data['Close'])
+        data['Close_log_diff'] = data['Close_log'].diff()
+        
+        plt.figure(figsize=(12, 6))
+        plt.plot(data['Date'][1:], data['Close_log_diff'][1:])
+        plt.title('Log Transformed First Order Differencing')
+        plt.xlabel('Date')
+        plt.ylabel('Log Difference')
+        plt.savefig('./visualizations/log_differenced_series.png')
+        plt.close()
+        
+        print("\nTesting stationarity of log-differenced series:")
+        is_log_diff_stationary = test_stationarity(data['Close_log_diff'].dropna())
+        print(f"Is the log-differenced series stationary? {is_log_diff_stationary}")
+
+# Feature Engineering
+# Create lag features
+for i in range(1, 6):
+    data[f'Close_lag_{i}'] = data['Close'].shift(i)
+
+# Create rolling statistics
+for window in [7, 14, 30]:
+    data[f'Close_rolling_{window}'] = data['Close'].rolling(window=window).mean()
+    data[f'Close_volatility_{window}'] = data['Close'].rolling(window=window).std()
+
+# Create date-based features
+data['day_of_week'] = data['Date'].dt.dayofweek
+data['month'] = data['Date'].dt.month
+data['year'] = data['Date'].dt.year
+
+# Create technical indicators
+data['daily_return'] = data['Close'].pct_change()
+
+# Create target variable (next day's closing price)
+data['target'] = data['Close'].shift(-1)
+
+# Drop rows with NaN values
+data_clean = data.dropna()
+
+# Correlation analysis
+correlation_matrix = data_clean[['Close', 'Open', 'High', 'Low', 'Volume', 
+                                'Close_lag_1', 'Close_lag_2', 'Close_lag_3',
+                                'Close_rolling_7', 'Close_rolling_14', 'Close_rolling_30',
+                                'Close_volatility_7', 'Close_volatility_14', 'Close_volatility_30',
+                                'daily_return', 'target']].corr()
+
+plt.figure(figsize=(12, 10))
+sns.heatmap(correlation_matrix, annot=True, cmap='coolwarm', fmt='.2f', linewidths=0.5)
+plt.title('Correlation Matrix of Features')
+plt.savefig('./visualizations/correlation_matrix.png')
+plt.close()
+
+# Split the data into training and testing sets (80-20 split)
+train_size = int(len(data_clean) * 0.8)
+train_data = data_clean.iloc[:train_size]
+test_data = data_clean.iloc[train_size:]
+
+print(f"Training set size: {train_data.shape}")
+print(f"Testing set size: {test_data.shape}")
+
+# Save the processed data
+train_data.to_csv('./data/train_data.csv', index=False)
+test_data.to_csv('./data/test_data.csv', index=False)
+
+print("Data preprocessing completed and files saved.")
+
+# Additional visualizations for the paper
+# Historical trend with volume
+fig, ax1 = plt.subplots(figsize=(12, 6))
+
+color = 'tab:blue'
+ax1.set_xlabel('Date')
+ax1.set_ylabel('Price (USD)', color=color)
+ax1.plot(data['Date'], data['Close'], color=color)
+ax1.tick_params(axis='y', labelcolor=color)
+
+ax2 = ax1.twinx()
+color = 'tab:red'
+ax2.set_ylabel('Volume', color=color)
+ax2.bar(data['Date'], data['Volume'], alpha=0.3, color=color)
+ax2.tick_params(axis='y', labelcolor=color)
+
+plt.title('Tesla Stock Price and Trading Volume (2010-2024)')
+fig.tight_layout()
+plt.savefig('./visualizations/tesla_historical_trend.png')
+plt.close()
+
+# Volatility over time
+data['volatility_30d'] = data['Close'].rolling(window=30).std()
+data['volatility_90d'] = data['Close'].rolling(window=90).std()
+
+plt.figure(figsize=(12, 6))
+plt.plot(data['Date'][90:], data['volatility_30d'][90:], label='30-Day Volatility')
+plt.plot(data['Date'][90:], data['volatility_90d'][90:], label='90-Day Volatility')
+plt.title('Tesla Stock Price Volatility Over Time')
+plt.xlabel('Date')
+plt.ylabel('Volatility (Standard Deviation)')
+plt.legend()
+plt.savefig('./visualizations/tesla_volatility.png')
+plt.close()
+
+# Monthly seasonal patterns
+data['month_name'] = data['Date'].dt.strftime('%b')
+monthly_avg = data.groupby('month_name')['Close'].mean().reindex(['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'])
+
+plt.figure(figsize=(12, 6))
+monthly_avg.plot(kind='bar', color='skyblue')
+plt.title('Tesla Stock: Average Price by Month')
+plt.xlabel('Month')
+plt.ylabel('Average Price (USD)')
+plt.savefig('./visualizations/monthly_average_prices.png')
+plt.close()
+
+# Monthly returns
+data['monthly_return'] = data.groupby(data['Date'].dt.to_period('M'))['Close'].pct_change()
+monthly_return_avg = data.groupby(data['month_name'])['monthly_return'].mean().reindex(['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'])
+
+plt.figure(figsize=(12, 6))
+monthly_return_avg.plot(kind='bar', color='lightgreen')
+plt.title('Tesla Stock: Average Monthly Returns')
+plt.xlabel('Month')
+plt.ylabel('Average Return (%)')
+plt.axhline(y=0, color='r', linestyle='-', alpha=0.3)
+plt.savefig('./visualizations/monthly_seasonal_pattern.png')
+plt.close()
+
+print("Additional visualizations created for the paper.")
+```
+
+<a name="arima-model-implementation"></a>
+## 2. ARIMA Model Implementation (arima_model.py)
+
+```python
+# arima_model.py
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from statsmodels.tsa.arima.model import ARIMA
+from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+import os
+import warnings
+warnings.filterwarnings('ignore')
+
+# Set the style for plots
+plt.style.use('ggplot')
+sns.set_style('whitegrid')
+
+# Create directories if they don't exist
+os.makedirs('./visualizations', exist_ok=True)
+
+# Load the processed data
+train_data = pd.read_csv('./data/train_data.csv')
+test_data = pd.read_csv('./data/test_data.csv')
+
+# Convert Date to datetime
+train_data['Date'] = pd.to_datetime(train_data['Date'])
+test_data['Date'] = pd.to_datetime(test_data['Date'])
+
+print(f"Training set size: {train_data.shape}")
+print(f"Testing set size: {test_data.shape}")
+
+# Extract the closing prices
+train_close = train_data['Close'].values
+test_close = test_data['Close'].values
+
+# Plot ACF and PACF to determine ARIMA parameters
+train_diff = np.diff(train_close)
+
+plt.figure(figsize=(12, 6))
+plot_acf(train_diff, lags=40, ax=plt.gca())
+plt.title('Autocorrelation Function (ACF)')
+plt.savefig('./visualizations/acf_plot.png')
+plt.close()
+
+plt.figure(figsize=(12, 6))
+plot_pacf(train_diff, lags=40, ax=plt.gca())
+plt.title('Partial Autocorrelation Function (PACF)')
+plt.savefig('./visualizations/pacf_plot.png')
+plt.close()
+
+# Define ARIMA models to test
+arima_orders = [(1,1,1), (2,1,2), (1,1,2), (2,1,1), (5,1,0), (0,1,5)]
+
+# Function to evaluate ARIMA model
+def evaluate_arima_model(train, test, arima_order):
+    history = [x for x in train]
+    predictions = []
+    
+    # Make predictions for each time point in the test set
+    for t in range(len(test)):
+        model = ARIMA(history, order=arima_order)
+        model_fit = model.fit()
+        yhat = model_fit.forecast()[0]
+        predictions.append(yhat)
+        history.append(test[t])
+    
+    # Calculate error metrics
+    mse = mean_squared_error(test, predictions)
+    rmse = np.sqrt(mse)
+    mae = mean_absolute_error(test, predictions)
+    r2 = r2_score(test, predictions)
+    
+    return {
+        'order': arima_order,
+        'predictions': predictions,
+        'mse': mse,
+        'rmse': rmse,
+        'mae': mae,
+        'r2': r2
+    }
+
+# Evaluate all ARIMA models
+results = []
+for order in arima_orders:
+    try:
+        print(f"Evaluating ARIMA{order}...")
+        result = evaluate_arima_model(train_close, test_close, order)
+        results.append(result)
+        print(f"ARIMA{order} - RMSE: {result['rmse']:.4f}, MAE: {result['mae']:.4f}, R²: {result['r2']:.4f}")
+    except Exception as e:
+        print(f"Error evaluating ARIMA{order}: {e}")
+
+# Find the best model based on RMSE
+best_model = min(results, key=lambda x: x['rmse'])
+print(f"\nBest model: ARIMA{best_model['order']} with RMSE: {best_model['rmse']:.4f}")
+
+# Plot the predictions of the best model
+plt.figure(figsize=(12, 6))
+plt.plot(test_data['Date'], test_close, label='Actual', color='blue')
+plt.plot(test_data['Date'], best_model['predictions'], label=f"ARIMA{best_model['order']}", color='red')
+plt.title(f"ARIMA{best_model['order']} Predictions vs Actual")
+plt.xlabel('Date')
+plt.ylabel('Price (USD)')
+plt.legend()
+plt.savefig('./visualizations/arima_prediction_vs_actual.png')
+plt.close()
+
+# Create a table of results
+results_df = pd.DataFrame([
+    {
+        'Model': f"ARIMA{r['order']}",
+        'RMSE': r['rmse'],
+        'MAE': r['mae'],
+        'R²': r['r2']
+    } for r in results
+])
+
+print("\nModel Comparison:")
+print(results_df.sort_values('RMSE'))
+
+# Save the results
+results_df.to_csv('./data/arima_results.csv', index=False)
+
+# Create a comparison plot of all models
+plt.figure(figsize=(12, 8))
+plt.plot(test_data['Date'][:len(best_model['predictions'])], test_close[:len(best_model['predictions'])], label='Actual', linewidth=2)
+
+for result in results:
+    plt.plot(test_data['Date'][:len(result['predictions'])], result['predictions'], 
+             label=f"ARIMA{result['order']} (RMSE: {result['rmse']:.2f})", alpha=0.7)
+
+plt.title('ARIMA Models Comparison')
+plt.xlabel('Date')
+plt.ylabel('Price (USD)')
+plt.legend()
+plt.savefig('./visualizations/arima_models_comparison.png')
+plt.close()
+
+print("ARIMA modeling completed and results saved.")
+```
+
+<a name="decision-tree-model-implementation"></a>
+## 3. Decision Tree Model Implementation (decision_tree_model.py)
+
+```python
+# decision_tree_model.py
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.tree import DecisionTreeRegressor, plot_tree
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+from sklearn.model_selection import GridSearchCV
+import os
+import warnings
+warnings.filterwarnings('ignore')
+
+# Set the style for plots
+plt.style.use('ggplot')
+sns.set_style('whitegrid')
+
+# Create directories if they don't exist
+os.makedirs('./visualizations', exist_ok=True)
+os.makedirs('./data', exist_ok=True)
+
+# Load the processed data
+train_data = pd.read_csv('./data/train_data.csv')
+test_data = pd.read_csv('./data/test_data.csv')
+
+# Convert Date to datetime
+train_data['Date'] = pd.to_datetime(train_data['Date'])
+test_data['Date'] = pd.to_datetime(test_data['Date'])
+
+print(f"Training set size: {train_data.shape}")
+print(f"Testing set size: {test_data.shape}")
+
+# Define features and target
+feature_columns = ['Open', 'High', 'Low', 'Volume', 
+                  'Close_lag_1', 'Close_lag_2', 'Close_lag_3', 'Close_lag_4', 'Close_lag_5',
+                  'Close_rolling_7', 'Close_rolling_14', 'Close_rolling_30',
+                  'Close_volatility_7', 'Close_volatility_14', 'Close_volatility_30',
+                  'day_of_week', 'month', 'year', 'daily_return']
+
+X_train = train_data[feature_columns]
+y_train = train_data['target']
+X_test = test_data[feature_columns]
+y_test = test_data['target']
+
+# 1. Simple Decision Tree
+print("\nTraining Simple Decision Tree...")
+dt = DecisionTreeRegressor(random_state=42)
+dt.fit(X_train, y_train)
+
+# Make predictions
+dt_train_pred = dt.predict(X_train)
+dt_test_pred = dt.predict(X_test)
+
+# Evaluate
+dt_train_rmse = np.sqrt(mean_squared_error(y_train, dt_train_pred))
+dt_train_mae = mean_absolute_error(y_train, dt_train_pred)
+dt_train_r2 = r2_score(y_train, dt_train_pred)
+
+dt_test_rmse = np.sqrt(mean_squared_error(y_test, dt_test_pred))
+dt_test_mae = mean_absolute_error(y_test, dt_test_pred)
+dt_test_r2 = r2_score(y_test, dt_test_pred)
+
+print(f"Simple Decision Tree - Training: RMSE: {dt_train_rmse:.4f}, MAE: {dt_train_mae:.4f}, R²: {dt_train_r2:.4f}")
+print(f"Simple Decision Tree - Testing: RMSE: {dt_test_rmse:.4f}, MAE: {dt_test_mae:.4f}, R²: {dt_test_r2:.4f}")
+
+# 2. Optimized Decision Tree with GridSearchCV
+print("\nOptimizing Decision Tree with GridSearchCV...")
+param_grid = {
+    'max_depth': [5, 10, 15, 20, None],
+    'min_samples_split': [2, 5, 10],
+    'min_samples_leaf': [1, 2, 4]
+}
+
+grid_search = GridSearchCV(DecisionTreeRegressor(random_state=42), param_grid, cv=5, scoring='neg_mean_squared_error')
+grid_search.fit(X_train, y_train)
+
+print(f"Best parameters: {grid_search.best_params_}")
+dt_opt = grid_search.best_estimator_
+
+# Make predictions with optimized model
+dt_opt_train_pred = dt_opt.predict(X_train)
+dt_opt_test_pred = dt_opt.predict(X_test)
+
+# Evaluate optimized model
+dt_opt_train_rmse = np.sqrt(mean_squared_error(y_train, dt_opt_train_pred))
+dt_opt_train_mae = mean_absolute_error(y_train, dt_opt_train_pred)
+dt_opt_train_r2 = r2_score(y_train, dt_opt_train_pred)
+
+dt_opt_test_rmse = np.sqrt(mean_squared_error(y_test, dt_opt_test_pred))
+dt_opt_test_mae = mean_absolute_error(y_test, dt_opt_test_pred)
+dt_opt_test_r2 = r2_score(y_test, dt_opt_test_pred)
+
+print(f"Optimized Decision Tree - Training: RMSE: {dt_opt_train_rmse:.4f}, MAE: {dt_opt_train_mae:.4f}, R²: {dt_opt_train_r2:.4f}")
+print(f"Optimized Decision Tree - Testing: RMSE: {dt_opt_test_rmse:.4f}, MAE: {dt_opt_test_mae:.4f}, R²: {dt_opt_test_r2:.4f}")
+
+# Calculate directional accuracy for optimized decision tree
+actual_direction = np.sign(y_test.values[1:] - y_test.values[:-1])
+predicted_direction = np.sign(dt_opt_test_pred[1:] - dt_opt_test_pred[:-1])
+directional_accuracy = np.mean(actual_direction == predicted_direction) * 100
+print(f"Optimized Decision Tree - Directional Accuracy: {directional_accuracy:.2f}%")
+
+# 3. Random Forest
+print("\nTraining Random Forest...")
+rf = RandomForestRegressor(n_estimators=100, random_state=42)
+rf.fit(X_train, y_train)
+
+# Make predictions
+rf_train_pred = rf.predict(X_train)
+rf_test_pred = rf.predict(X_test)
+
+# Evaluate
+rf_train_rmse = np.sqrt(mean_squared_error(y_train, rf_train_pred))
+rf_train_mae = mean_absolute_error(y_train, rf_train_pred)
+rf_train_r2 = r2_score(y_train, rf_train_pred)
+
+rf_test_rmse = np.sqrt(mean_squared_error(y_test, rf_test_pred))
+rf_test_mae = mean_absolute_error(y_test, rf_test_pred)
+rf_test_r2 = r2_score(y_test, rf_test_pred)
+
+print(f"Random Forest - Training: RMSE: {rf_train_rmse:.4f}, MAE: {rf_train_mae:.4f}, R²: {rf_train_r2:.4f}")
+print(f"Random Forest - Testing: RMSE: {rf_test_rmse:.4f}, MAE: {rf_test_mae:.4f}, R²: {rf_test_r2:.4f}")
+
+# Calculate directional accuracy for random forest
+rf_predicted_direction = np.sign(rf_test_pred[1:] - rf_test_pred[:-1])
+rf_directional_accuracy = np.mean(actual_direction == rf_predicted_direction) * 100
+print(f"Random Forest - Directional Accuracy: {rf_directional_accuracy:.2f}%")
+
+# Feature importance for optimized decision tree
+dt_feature_importance = pd.DataFrame({
+    'Feature': feature_columns,
+    'Importance': dt_opt.feature_importances_
+}).sort_values('Importance', ascending=False)
+
+print("\nTop 5 features for Optimized Decision Tree:")
+print(dt_feature_importance.head())
+
+# Feature importance for random forest
+rf_feature_importance = pd.DataFrame({
+    'Feature': feature_columns,
+    'Importance': rf.feature_importances_
+}).sort_values('Importance', ascending=False)
+
+print("\nTop 5 features for Random Forest:")
+print(rf_feature_importance.head())
+
+# Plot feature importance for optimized decision tree
+plt.figure(figsize=(12, 8))
+sns.barplot(x='Importance', y='Feature', data=dt_feature_importance.head(10))
+plt.title('Top 10 Features for Optimized Decision Tree')
+plt.tight_layout()
+plt.savefig('./visualizations/dt_feature_importance.png')
+plt.close()
+
+# Plot feature importance for random forest
+plt.figure(figsize=(12, 8))
+sns.barplot(x='Importance', y='Feature', data=rf_feature_importance.head(10))
+plt.title('Top 10 Features for Random Forest')
+plt.tight_layout()
+plt.savefig('./visualizations/rf_feature_importance.png')
+plt.close()
+
+# Plot detailed feature importance
+plt.figure(figsize=(14, 10))
+sns.barplot(x='Importance', y='Feature', data=dt_feature_importance.head(10))
+plt.title('Top 10 Features for Tesla Stock Price Prediction', fontsize=16)
+plt.xlabel('Importance', fontsize=14)
+plt.ylabel('Feature', fontsize=14)
+plt.xticks(fontsize=12)
+plt.yticks(fontsize=12)
+
+# Add percentage labels
+for i, v in enumerate(dt_feature_importance.head(10)['Importance']):
+    plt.text(v + 0.01, i, f"{v:.1%}", va='center', fontsize=12)
+
+plt.tight_layout()
+plt.savefig('./visualizations/feature_importance_detailed.png')
+plt.close()
+
+# Visualize the decision tree
+plt.figure(figsize=(20, 10))
+plot_tree(dt_opt, feature_names=feature_columns, filled=True, max_depth=3, fontsize=10)
+plt.title('Decision Tree for Tesla Stock Price Prediction (Depth 3)')
+plt.tight_layout()
+plt.savefig('./visualizations/decision_tree_visualization.png')
+plt.close()
+
+# Plot actual vs predicted for Random Forest
+plt.figure(figsize=(12, 6))
+plt.plot(test_data['Date'], y_test, label='Actual', color='blue')
+plt.plot(test_data['Date'], rf_test_pred, label='Random Forest', color='red')
+plt.title('Random Forest Predictions vs Actual')
+plt.xlabel('Date')
+plt.ylabel('Price (USD)')
+plt.legend()
+plt.savefig('./visualizations/rf_prediction_vs_actual.png')
+plt.close()
+
+# Create a table of results
+results_df = pd.DataFrame([
+    {
+        'Model': 'Simple Decision Tree',
+        'Training RMSE': dt_train_rmse,
+        'Training MAE': dt_train_mae,
+        'Training R²': dt_train_r2,
+        'Testing RMSE': dt_test_rmse,
+        'Testing MAE': dt_test_mae,
+        'Testing R²': dt_test_r2,
+        'Directional Accuracy': 'N/A'
+    },
+    {
+        'Model': 'Optimized Decision Tree',
+        'Training RMSE': dt_opt_train_rmse,
+        'Training MAE': dt_opt_train_mae,
+        'Training R²': dt_opt_train_r2,
+        'Testing RMSE': dt_opt_test_rmse,
+        'Testing MAE': dt_opt_test_mae,
+        'Testing R²': dt_opt_test_r2,
+        'Directional Accuracy': f"{directional_accuracy:.2f}%"
+    },
+    {
+        'Model': 'Random Forest',
+        'Training RMSE': rf_train_rmse,
+        'Training MAE': rf_train_mae,
+        'Training R²': rf_train_r2,
+        'Testing RMSE': rf_test_rmse,
+        'Testing MAE': rf_test_mae,
+        'Testing R²': rf_test_r2,
+        'Directional Accuracy': f"{rf_directional_accuracy:.2f}%"
+    }
+])
+
+print("\nModel Comparison:")
+print(results_df)
+
+# Save the results
+results_df.to_csv('./data/decision_tree_results.csv', index=False)
+dt_feature_importance.to_csv('./data/dt_feature_importance.csv', index=False)
+rf_feature_importance.to_csv('./data/rf_feature_importance.csv', index=False)
+
+# Save predictions for later evaluation
+pd.DataFrame({
+    'Date': test_data['Date'],
+    'Actual': y_test,
+    'DT_Simple': dt_test_pred,
+    'DT_Optimized': dt_opt_test_pred,
+    'Random_Forest': rf_test_pred
+}).to_csv('./data/decision_tree_predictions.csv', index=False)
+
+print("Decision Tree modeling completed and results saved.")
+```
+
+<a name="model-evaluation"></a>
+## 4. Model Evaluation (evaluate_models.py)
+
+```python
+# evaluate_models.py
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+import os
+
+# Set the style for plots
+plt.style.use('ggplot')
+sns.set_style('whitegrid')
+
+# Create directories if they don't exist
+os.makedirs('./visualizations', exist_ok=True)
+os.makedirs('./visualizations/paper_figures', exist_ok=True)
+
+# Load the results
+arima_results = pd.read_csv('./data/arima_results.csv')
+dt_results = pd.read_csv('./data/decision_tree_results.csv')
+
+# Load the predictions
+test_data = pd.read_csv('./data/test_data.csv')
+test_data['Date'] = pd.to_datetime(test_data['Date'])
+dt_predictions = pd.read_csv('./data/decision_tree_predictions.csv')
+dt_predictions['Date'] = pd.to_datetime(dt_predictions['Date'])
+
+# Get the best ARIMA model
+best_arima = arima_results.sort_values('RMSE').iloc[0]
+print(f"Best ARIMA model: {best_arima['Model']} with RMSE: {best_arima['RMSE']:.4f}")
+
+# Get the best Decision Tree model
+best_dt = dt_results.sort_values('Testing RMSE').iloc[0]
+print(f"Best Decision Tree model: {best_dt['Model']} with RMSE: {best_dt['Testing RMSE']:.4f}")
+
+# Calculate improvement percentage
+rmse_improvement = (best_arima['RMSE'] - best_dt['Testing RMSE']) / best_arima['RMSE'] * 100
+print(f"RMSE improvement: {rmse_improvement:.2f}%")
+
+# Create a combined results dataframe for comparison
+combined_results = pd.DataFrame([
+    {
+        'Model': best_arima['Model'],
+        'RMSE': best_arima['RMSE'],
+        'MAE': best_arima['MAE'],
+        'R²': best_arima['R²'],
+        'Directional Accuracy': 'N/A'
+    },
+    {
+        'Model': 'Simple Decision Tree',
+        'RMSE': dt_results[dt_results['Model'] == 'Simple Decision Tree']['Testing RMSE'].values[0],
+        'MAE': dt_results[dt_results['Model'] == 'Simple Decision Tree']['Testing MAE'].values[0],
+        'R²': dt_results[dt_results['Model'] == 'Simple Decision Tree']['Testing R²'].values[0],
+        'Directional Accuracy': 'N/A'
+    },
+    {
+        'Model': 'Optimized Decision Tree',
+        'RMSE': dt_results[dt_results['Model'] == 'Optimized Decision Tree']['Testing RMSE'].values[0],
+        'MAE': dt_results[dt_results['Model'] == 'Optimized Decision Tree']['Testing MAE'].values[0],
+        'R²': dt_results[dt_results['Model'] == 'Optimized Decision Tree']['Testing R²'].values[0],
+        'Directional Accuracy': dt_results[dt_results['Model'] == 'Optimized Decision Tree']['Directional Accuracy'].values[0]
+    },
+    {
+        'Model': 'Random Forest',
+        'RMSE': dt_results[dt_results['Model'] == 'Random Forest']['Testing RMSE'].values[0],
+        'MAE': dt_results[dt_results['Model'] == 'Random Forest']['Testing MAE'].values[0],
+        'R²': dt_results[dt_results['Model'] == 'Random Forest']['Testing R²'].values[0],
+        'Directional Accuracy': dt_results[dt_results['Model'] == 'Random Forest']['Directional Accuracy'].values[0]
+    }
+])
+
+print("\nCombined Model Comparison:")
+print(combined_results)
+
+# Save the combined results
+combined_results.to_csv('./data/combined_results.csv', index=False)
+
+# Create visualizations for model comparison
+# 1. Bar chart of RMSE
+plt.figure(figsize=(12, 6))
+sns.barplot(x='Model', y='RMSE', data=combined_results)
+plt.title('RMSE Comparison Across Models')
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.savefig('./visualizations/rmse_comparison.png')
+plt.close()
+
+# 2. Bar chart of R²
+plt.figure(figsize=(12, 6))
+sns.barplot(x='Model', y='R²', data=combined_results)
+plt.title('R² Comparison Across Models')
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.savefig('./visualizations/r2_comparison.png')
+plt.close()
+
+# 3. Detailed model comparison
+fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+
+# RMSE
+sns.barplot(x='Model', y='RMSE', data=combined_results, ax=axes[0])
+axes[0].set_title('RMSE')
+axes[0].set_xticklabels(axes[0].get_xticklabels(), rotation=45)
+
+# MAE
+sns.barplot(x='Model', y='MAE', data=combined_results, ax=axes[1])
+axes[1].set_title('MAE')
+axes[1].set_xticklabels(axes[1].get_xticklabels(), rotation=45)
+
+# R²
+sns.barplot(x='Model', y='R²', data=combined_results, ax=axes[2])
+axes[2].set_title('R²')
+axes[2].set_xticklabels(axes[2].get_xticklabels(), rotation=45)
+
+plt.suptitle('Model Performance Metrics Comparison', fontsize=16)
+plt.tight_layout()
+plt.savefig('./visualizations/model_comparison_detailed.png')
+plt.close()
+
+# 4. Residual analysis for Random Forest
+actual = dt_predictions['Actual']
+rf_pred = dt_predictions['Random_Forest']
+residuals = actual - rf_pred
+
+plt.figure(figsize=(12, 10))
+
+# Residuals vs Fitted
+plt.subplot(2, 2, 1)
+plt.scatter(rf_pred, residuals, alpha=0.5)
+plt.axhline(y=0, color='r', linestyle='-')
+plt.title('Residuals vs Fitted')
+plt.xlabel('Fitted values')
+plt.ylabel('Residuals')
+
+# Residual distribution
+plt.subplot(2, 2, 2)
+sns.histplot(residuals, kde=True)
+plt.title('Residual Distribution')
+plt.xlabel('Residuals')
+
+# QQ plot of residuals
+plt.subplot(2, 2, 3)
+from scipy import stats
+stats.probplot(residuals, dist="norm", plot=plt)
+plt.title('Q-Q Plot')
+
+# Residuals over time
+plt.subplot(2, 2, 4)
+plt.plot(dt_predictions['Date'], residuals)
+plt.axhline(y=0, color='r', linestyle='-')
+plt.title('Residuals Over Time')
+plt.xlabel('Date')
+plt.ylabel('Residuals')
+
+plt.tight_layout()
+plt.savefig('./visualizations/rf_residual_analysis.png')
+plt.close()
+
+# 5. Create a detailed comparison table with all metrics
+detailed_comparison = pd.DataFrame({
+    'Metric': ['RMSE', 'MAE', 'R²', 'Directional Accuracy'],
+    'ARIMA': [best_arima['RMSE'], best_arima['MAE'], best_arima['R²'], 'N/A'],
+    'Simple DT': [
+        dt_results[dt_results['Model'] == 'Simple Decision Tree']['Testing RMSE'].values[0],
+        dt_results[dt_results['Model'] == 'Simple Decision Tree']['Testing MAE'].values[0],
+        dt_results[dt_results['Model'] == 'Simple Decision Tree']['Testing R²'].values[0],
+        'N/A'
+    ],
+    'Optimized DT': [
+        dt_results[dt_results['Model'] == 'Optimized Decision Tree']['Testing RMSE'].values[0],
+        dt_results[dt_results['Model'] == 'Optimized Decision Tree']['Testing MAE'].values[0],
+        dt_results[dt_results['Model'] == 'Optimized Decision Tree']['Testing R²'].values[0],
+        dt_results[dt_results['Model'] == 'Optimized Decision Tree']['Directional Accuracy'].values[0]
+    ],
+    'Random Forest': [
+        dt_results[dt_results['Model'] == 'Random Forest']['Testing RMSE'].values[0],
+        dt_results[dt_results['Model'] == 'Random Forest']['Testing MAE'].values[0],
+        dt_results[dt_results['Model'] == 'Random Forest']['Testing R²'].values[0],
+        dt_results[dt_results['Model'] == 'Random Forest']['Directional Accuracy'].values[0]
+    ]
+})
+
+print("\nDetailed Comparison Table:")
+print(detailed_comparison)
+
+# Save the detailed comparison
+detailed_comparison.to_csv('./data/detailed_comparison.csv', index=False)
+
+# Create paper-specific visualizations
+# 1. Enhanced model comparison
+plt.figure(figsize=(14, 8))
+
+# Create a bar chart with custom colors and annotations
+models = combined_results['Model']
+rmse_values = combined_results['RMSE']
+r2_values = combined_results['R²']
+
+x = np.arange(len(models))
+width = 0.35
+
+fig, ax1 = plt.subplots(figsize=(14, 8))
+
+# RMSE bars
+bars1 = ax1.bar(x - width/2, rmse_values, width, label='RMSE', color='#3498db')
+ax1.set_ylabel('RMSE', fontsize=14, color='#3498db')
+ax1.tick_params(axis='y', labelcolor='#3498db')
+ax1.set_ylim(0, max(rmse_values) * 1.2)
+
+# Add RMSE values on top of bars
+for i, v in enumerate(rmse_values):
+    ax1.text(i - width/2, v + 5, f"{v:.2f}", ha='center', va='bottom', fontsize=12, color='#3498db')
+
+# Create a second y-axis for R²
+ax2 = ax1.twinx()
+bars2 = ax2.bar(x + width/2, r2_values, width, label='R²', color='#e74c3c')
+ax2.set_ylabel('R²', fontsize=14, color='#e74c3c')
+ax2.tick_params(axis='y', labelcolor='#e74c3c')
+ax2.set_ylim(-2.5, 1.5)
+
+# Add R² values on top of bars
+for i, v in enumerate(r2_values):
+    ax2.text(i + width/2, v + 0.1, f"{v:.2f}", ha='center', va='bottom', fontsize=12, color='#e74c3c')
+
+# Set x-axis labels and title
+ax1.set_xticks(x)
+ax1.set_xticklabels(models, rotation=45, ha='right', fontsize=12)
+ax1.set_xlabel('Model', fontsize=14)
+plt.title('Model Performance Comparison: RMSE and R²', fontsize=16)
+
+# Add a legend
+lines1, labels1 = ax1.get_legend_handles_labels()
+lines2, labels2 = ax2.get_legend_handles_labels()
+ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper right', fontsize=12)
+
+plt.tight_layout()
+plt.savefig('./visualizations/paper_figures/model_comparison_detailed.png', dpi=300)
+plt.close()
+
+# 2. Actual vs Predicted for Random Forest (enhanced for paper)
+plt.figure(figsize=(14, 8))
+
+# Plot actual and predicted values
+plt.plot(dt_predictions['Date'], dt_predictions['Actual'], label='Actual', linewidth=2, color='#2c3e50')
+plt.plot(dt_predictions['Date'], dt_predictions['Random_Forest'], label='Random Forest Prediction', linewidth=2, color='#e74c3c')
+
+# Add shaded area for prediction error
+plt.fill_between(dt_predictions['Date'], 
+                 dt_predictions['Actual'], 
+                 dt_predictions['Random_Forest'], 
+                 alpha=0.2, 
+                 color='#e74c3c', 
+                 label='Prediction Error')
+
+# Customize the plot
+plt.title('Tesla Stock Price: Actual vs Random Forest Prediction', fontsize=16)
+plt.xlabel('Date', fontsize=14)
+plt.ylabel('Price (USD)', fontsize=14)
+plt.grid(True, alpha=0.3)
+plt.legend(fontsize=12)
+
+# Add annotations for key points
+max_actual_idx = dt_predictions['Actual'].idxmax()
+max_actual_date = dt_predictions.loc[max_actual_idx, 'Date']
+max_actual_price = dt_predictions.loc[max_actual_idx, 'Actual']
+plt.annotate(f'Peak: ${max_actual_price:.2f}', 
+             xy=(max_actual_date, max_actual_price),
+             xytext=(max_actual_date, max_actual_price + 50),
+             arrowprops=dict(facecolor='black', shrink=0.05, width=1.5),
+             fontsize=12)
+
+plt.tight_layout()
+plt.savefig('./visualizations/paper_figures/rf_prediction_vs_actual.png', dpi=300)
+plt.close()
+
+# 3. Feature importance visualization (enhanced for paper)
+feature_importance = pd.read_csv('./data/dt_feature_importance.csv')
+
+plt.figure(figsize=(14, 10))
+bars = sns.barplot(x='Importance', y='Feature', data=feature_importance.head(10), palette='viridis')
+
+# Add percentage labels
+for i, v in enumerate(feature_importance.head(10)['Importance']):
+    plt.text(v + 0.01, i, f"{v:.1%}", va='center', fontsize=12)
+
+# Customize the plot
+plt.title('Top 10 Features for Tesla Stock Price Prediction', fontsize=16)
+plt.xlabel('Importance', fontsize=14)
+plt.ylabel('Feature', fontsize=14)
+plt.xticks(fontsize=12)
+plt.yticks(fontsize=12)
+plt.grid(axis='x', alpha=0.3)
+
+plt.tight_layout()
+plt.savefig('./visualizations/paper_figures/feature_importance_detailed.png', dpi=300)
+plt.close()
+
+print("Model evaluation completed and visualizations saved.")
+```
+
+<a name="paper-visualizations"></a>
+## 5. Paper Visualizations (create_paper_visualizations.py)
+
+```python
+# create_paper_visualizations.py
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from matplotlib.colors import LinearSegmentedColormap
+import os
+
+# Set the style for plots
+plt.style.use('ggplot')
+sns.set_style('whitegrid')
+plt.rcParams['font.family'] = 'serif'
+plt.rcParams['font.serif'] = ['Times New Roman']
+
+# Create directories if they don't exist
+os.makedirs('./visualizations/paper_figures', exist_ok=True)
+
+# Load the data
+data = pd.read_csv('./data/TESLA.csv')
+data['Date'] = pd.to_datetime(data['Date'])
+
+train_data = pd.read_csv('./data/train_data.csv')
+test_data = pd.read_csv('./data/test_data.csv')
+train_data['Date'] = pd.to_datetime(train_data['Date'])
+test_data['Date'] = pd.to_datetime(test_data['Date'])
+
+dt_predictions = pd.read_csv('./data/decision_tree_predictions.csv')
+dt_predictions['Date'] = pd.to_datetime(dt_predictions['Date'])
+
+combined_results = pd.read_csv('./data/combined_results.csv')
+detailed_comparison = pd.read_csv('./data/detailed_comparison.csv')
+
+# 1. Historical trend with volume (enhanced)
+fig, ax1 = plt.subplots(figsize=(14, 8))
+
+# Plot price
+color = '#2980b9'
+ax1.set_xlabel('Date', fontsize=14)
+ax1.set_ylabel('Price (USD)', color=color, fontsize=14)
+ax1.plot(data['Date'], data['Close'], color=color, linewidth=2)
+ax1.tick_params(axis='y', labelcolor=color)
+ax1.grid(True, alpha=0.3)
+
+# Plot volume on secondary axis
+ax2 = ax1.twinx()
+color = '#e74c3c'
+ax2.set_ylabel('Volume (Millions)', color=color, fontsize=14)
+ax2.bar(data['Date'], data['Volume']/1000000, alpha=0.3, color=color)
+ax2.tick_params(axis='y', labelcolor=color)
+
+# Add annotations for key events
+events = [
+    {'date': '2020-01-01', 'text': 'COVID-19 Pandemic', 'y': 200},
+    {'date': '2020-12-01', 'text': 'S&P 500 Inclusion', 'y': 600},
+    {'date': '2022-04-01', 'text': 'Twitter Acquisition', 'y': 1000}
+]
+
+for event in events:
+    event_date = pd.to_datetime(event['date'])
+    ax1.annotate(event['text'], 
+                xy=(event_date, event['y']),
+                xytext=(event_date, event['y'] + 100),
+                arrowprops=dict(facecolor='black', shrink=0.05, width=1.5),
+                fontsize=12)
+
+plt.title('Tesla Stock Price and Trading Volume (2010-2024)', fontsize=16)
+fig.tight_layout()
+plt.savefig('./visualizations/paper_figures/tesla_historical_trend.png', dpi=300)
+plt.close()
+
+# 2. Volatility over time (enhanced)
+data['volatility_30d'] = data['Close'].rolling(window=30).std()
+data['volatility_90d'] = data['Close'].rolling(window=90).std()
+
+plt.figure(figsize=(14, 8))
+plt.plot(data['Date'][90:], data['volatility_30d'][90:], label='30-Day Volatility', linewidth=2, color='#3498db')
+plt.plot(data['Date'][90:], data['volatility_90d'][90:], label='90-Day Volatility', linewidth=2, color='#e74c3c')
+
+# Add shaded areas for high volatility periods
+high_vol_periods = [
+    {'start': '2020-02-01', 'end': '2020-05-01', 'label': 'COVID-19 Crash'},
+    {'start': '2020-08-01', 'end': '2020-11-01', 'label': 'Stock Split'},
+    {'start': '2021-10-01', 'end': '2022-01-01', 'label': 'Musk Twitter Poll'}
+]
+
+for period in high_vol_periods:
+    start_date = pd.to_datetime(period['start'])
+    end_date = pd.to_datetime(period['end'])
+    plt.axvspan(start_date, end_date, alpha=0.2, color='gray')
+    plt.annotate(period['label'],
+                xy=((start_date + (end_date - start_date)/2), data['volatility_30d'].max() * 0.9),
+                ha='center',
+                fontsize=12)
+
+plt.title('Tesla Stock Price Volatility Over Time', fontsize=16)
+plt.xlabel('Date', fontsize=14)
+plt.ylabel('Volatility (Standard Deviation)', fontsize=14)
+plt.legend(fontsize=12)
+plt.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.savefig('./visualizations/paper_figures/tesla_volatility.png', dpi=300)
+plt.close()
+
+# 3. Monthly seasonal patterns (enhanced)
+data['month_name'] = data['Date'].dt.strftime('%b')
+data['year'] = data['Date'].dt.year
+data['monthly_return'] = data.groupby(data['Date'].dt.to_period('M'))['Close'].pct_change()
+
+# Calculate average monthly returns
+monthly_return_avg = data.groupby('month_name')['monthly_return'].mean() * 100
+monthly_return_std = data.groupby('month_name')['monthly_return'].std() * 100
+monthly_return_data = pd.DataFrame({
+    'Month': monthly_return_avg.index,
+    'Average Return (%)': monthly_return_avg.values,
+    'Std Dev (%)': monthly_return_std.values
+}).reindex(index=['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'])
+
+plt.figure(figsize=(14, 8))
+bars = plt.bar(monthly_return_data.index, monthly_return_data['Average Return (%)'], 
+       yerr=monthly_return_data['Std Dev (%)'], 
+       capsize=5, 
+       color=[('#2ecc71' if x > 0 else '#e74c3c') for x in monthly_return_data['Average Return (%)']])
+
+# Add value labels
+for i, bar in enumerate(bars):
+    height = bar.get_height()
+    plt.text(bar.get_x() + bar.get_width()/2., 
+             height + (1 if height > 0 else -3),
+             f"{monthly_return_data['Average Return (%)'].iloc[i]:.1f}%",
+             ha='center', va='bottom' if height > 0 else 'top', fontsize=12)
+
+plt.title('Tesla Stock: Average Monthly Returns (2010-2024)', fontsize=16)
+plt.xlabel('Month', fontsize=14)
+plt.ylabel('Average Return (%)', fontsize=14)
+plt.axhline(y=0, color='black', linestyle='-', alpha=0.3)
+plt.grid(axis='y', alpha=0.3)
+plt.tight_layout()
+plt.savefig('./visualizations/paper_figures/monthly_seasonal_pattern.png', dpi=300)
+plt.close()
+
+# 4. Residual analysis for Random Forest (enhanced)
+actual = dt_predictions['Actual']
+rf_pred = dt_predictions['Random_Forest']
+residuals = actual - rf_pred
+
+fig, axes = plt.subplots(2, 2, figsize=(14, 12))
+
+# Residuals vs Fitted
+axes[0, 0].scatter(rf_pred, residuals, alpha=0.5, color='#3498db')
+axes[0, 0].axhline(y=0, color='#e74c3c', linestyle='-')
+axes[0, 0].set_title('Residuals vs Fitted Values', fontsize=14)
+axes[0, 0].set_xlabel('Fitted values', fontsize=12)
+axes[0, 0].set_ylabel('Residuals', fontsize=12)
+axes[0, 0].grid(True, alpha=0.3)
+
+# Residual distribution
+sns.histplot(residuals, kde=True, ax=axes[0, 1], color='#3498db')
+axes[0, 1].set_title('Residual Distribution', fontsize=14)
+axes[0, 1].set_xlabel('Residuals', fontsize=12)
+axes[0, 1].set_ylabel('Frequency', fontsize=12)
+axes[0, 1].grid(True, alpha=0.3)
+
+# QQ plot of residuals
+from scipy import stats
+stats.probplot(residuals, dist="norm", plot=axes[1, 0])
+axes[1, 0].set_title('Q-Q Plot (Testing Normality)', fontsize=14)
+axes[1, 0].grid(True, alpha=0.3)
+
+# Residuals over time
+axes[1, 1].plot(dt_predictions['Date'], residuals, color='#3498db')
+axes[1, 1].axhline(y=0, color='#e74c3c', linestyle='-')
+axes[1, 1].set_title('Residuals Over Time', fontsize=14)
+axes[1, 1].set_xlabel('Date', fontsize=12)
+axes[1, 1].set_ylabel('Residuals', fontsize=12)
+axes[1, 1].grid(True, alpha=0.3)
+
+plt.suptitle('Random Forest Model: Residual Analysis', fontsize=16)
+plt.tight_layout()
+plt.subplots_adjust(top=0.92)
+plt.savefig('./visualizations/paper_figures/rf_residual_analysis.png', dpi=300)
+plt.close()
+
+# 5. Decision tree visualization (simplified for paper)
+from sklearn.tree import DecisionTreeRegressor, export_graphviz
+import graphviz
+import io
+from PIL import Image
+
+# Load feature importance data to get feature names
+feature_importance = pd.read_csv('./data/dt_feature_importance.csv')
+feature_columns = feature_importance['Feature'].tolist()
+
+# Create a simplified decision tree for visualization
+X_train = train_data[feature_columns]
+y_train = train_data['target']
+
+# Train a simple decision tree with limited depth for visualization
+dt_viz = DecisionTreeRegressor(max_depth=3, random_state=42)
+dt_viz.fit(X_train, y_train)
+
+# Export the tree as a dot file
+dot_data = io.StringIO()
+export_graphviz(dt_viz, out_file=dot_data, feature_names=feature_columns,
+                filled=True, rounded=True, special_characters=True,
+                max_depth=3, proportion=True)
+
+# Save the dot file
+with open('./visualizations/paper_figures/decision_tree.dot', 'w') as f:
+    f.write(dot_data.getvalue())
+
+# Try to convert to PNG if graphviz is available
+try:
+    graph = graphviz.Source(dot_data.getvalue())
+    graph.render('./visualizations/paper_figures/decision_tree_visualization', format='png', cleanup=True)
+    print("Decision tree visualization created successfully.")
+except Exception as e:
+    print(f"Could not create decision tree visualization: {e}")
+    # Create a placeholder image with text
+    img = Image.new('RGB', (800, 600), color = (255, 255, 255))
+    plt.figure(figsize=(10, 8))
+    plt.text(0.5, 0.5, "Decision Tree Visualization\n(Requires Graphviz)", 
+             horizontalalignment='center', verticalalignment='center', fontsize=20)
+    plt.axis('off')
+    plt.savefig('./visualizations/paper_figures/decision_tree_visualization.png')
+    plt.close()
+
+# 6. Correlation matrix (enhanced)
+correlation_columns = ['Close', 'Open', 'High', 'Low', 'Volume', 
+                      'Close_lag_1', 'Close_rolling_7', 'Close_rolling_30',
+                      'Close_volatility_30', 'daily_return']
+correlation_matrix = train_data[correlation_columns].corr()
+
+# Create a custom colormap
+colors = ["#e74c3c", "#ffffff", "#3498db"]  # Red -> White -> Blue
+cmap = LinearSegmentedColormap.from_list("custom_diverging", colors, N=256)
+
+plt.figure(figsize=(14, 12))
+mask = np.triu(np.ones_like(correlation_matrix, dtype=bool))
+sns.heatmap(correlation_matrix, mask=mask, cmap=cmap, vmin=-1, vmax=1, 
+            annot=True, fmt='.2f', linewidths=0.5, square=True)
+plt.title('Correlation Matrix of Key Features', fontsize=16)
+plt.tight_layout()
+plt.savefig('./visualizations/paper_figures/feature_correlation_matrix.png', dpi=300)
+plt.close()
+
+print("Paper visualizations created successfully.")
+```
+
+This file contains all the Python code used in the research paper, organized by analysis phase. Each section includes the complete code for a specific part of the analysis, from data preprocessing to visualization creation.
